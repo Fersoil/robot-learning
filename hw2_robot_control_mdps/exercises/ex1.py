@@ -77,7 +77,6 @@ def ik_track(model, data, site_name, target_pos,
         np.ndarray: Target joint configuration (qpos) that achieves the desired end-effector position.
     """
     num_joints = model.nv
-    import pdb; pdb.set_trace()
     # Store the original joint configuration to restore later
     original_qpos = data.qpos.copy()
 
