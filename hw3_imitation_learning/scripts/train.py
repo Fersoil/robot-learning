@@ -28,11 +28,39 @@ from hw3.model import BasePolicy, build_policy
 from torch.utils.data import DataLoader, random_split
 
 # TODO: Choose your own hyperparameters!
-EPOCHS = 400
-BATCH_SIZE = 128
-LR = 1e-2
-VAL_SPLIT = 0.1
 
+hyperparameters = {}
+hyperparameters["1"] = {
+    "EPOCHS": 300,
+    "BATCH_SIZE": 64,
+    "LR": 1e-4,
+    "VAL_SPLIT": 0.1,
+    "D_MODEL": 512,
+    "DEPTH": 5,
+    "p": 0.1,
+    "CYCLE_EPOCHS": 50,  
+}
+hyperparameters["2"] = {
+    "EPOCHS": 200,
+    "BATCH_SIZE": 64,
+    "LR": 1e-4,
+    "VAL_SPLIT": 0.1,
+    "D_MODEL": 512,
+    "DEPTH": 4,
+    "p": 0.05,
+    "CYCLE_EPOCHS": 50,  
+}
+
+hyperparameters["3"] = {
+    "EPOCHS": 250,
+    "BATCH_SIZE": 64,
+    "LR": 1e-4,
+    "VAL_SPLIT": 0.1,
+    "D_MODEL": 512,
+    "DEPTH": 4,
+    "p": 0.05,
+    "CYCLE_EPOCHS": 50,  
+}
 
 def train_one_epoch(
     model: BasePolicy,
@@ -76,16 +104,12 @@ def evaluate(
 
     for batch in loader:
         states, action_chunks = batch
-
         states = states.to(device)
         action_chunks = action_chunks.to(device)
 
         loss = model.compute_loss(states, action_chunks)
         total_loss += loss.item()
-        n_batches += 1 
-
-        # TODO: Implement the evaluation step for one batch here.
-
+        n_batches += 1
     return total_loss / max(n_batches, 1)
 
 
@@ -101,6 +125,12 @@ def main() -> None:
         nargs="*",
         default=None,
         help="Optional additional processed .zarr stores to merge with --zarr.",
+    )
+    parser.add_argument(
+        "--hyperparam-set",
+        choices=["1", "2", "3"],
+        default="1",
+        help="Hyperparameter set: (1, 2 or 3)",
     )
     parser.add_argument(
         "--policy",
@@ -132,6 +162,20 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     args = parser.parse_args()
+
+    # load hyperparameters
+    if args.hyperparam_set in ["1", "2", "3"]:
+        choice = args.hyperparam_set
+        EPOCHS = hyperparameters[choice]["EPOCHS"]
+        BATCH_SIZE = hyperparameters[choice]["BATCH_SIZE"]
+        LR = hyperparameters[choice]["LR"]
+        VAL_SPLIT = hyperparameters[choice]["VAL_SPLIT"]
+        D_MODEL = hyperparameters[choice]["D_MODEL"]
+        DEPTH = hyperparameters[choice]["DEPTH"]
+        DROPOUT_P = hyperparameters[choice]["p"]
+        CYCLE_EPOCHS = hyperparameters[choice]["CYCLE_EPOCHS"]
+    else:
+        raise ValueError(f"Invalid hyperparam set: {args.hyperparam_set}")
 
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -187,18 +231,18 @@ def main() -> None:
         state_dim=states.shape[1],
         action_dim=actions.shape[1],
         chunk_size=args.chunk_size,
+        d_model=D_MODEL,
+        depth=DEPTH,
+        p=DROPOUT_P,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
 
-    # TODO: implement an optimizer and scheduler
-    # optimizer =
-    # scheduler =
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     # Use CosineAnnealingLR for smooth LR decay
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CYCLE_EPOCHS, eta_min=1e-7, last_epoch=-1)
 
     # ── training loop ─────────────────────────────────────────────────
     best_val = float("inf")
@@ -256,6 +300,9 @@ def main() -> None:
                     "state_dim": int(states.shape[1]),
                     "action_dim": int(actions.shape[1]),
                     "val_loss": val_loss,
+                    "d_model": D_MODEL,
+                    "depth": DEPTH,
+                    "p": DROPOUT_P,
                 },
                 save_path,
             )

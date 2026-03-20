@@ -116,6 +116,7 @@ def load_checkpoint(
 
     d_model = int(ckpt.get("d_model", 128))
     depth = int(ckpt.get("depth", 2))
+    p = float(ckpt.get("dropout_p", 0.05))
     policy_type = str(ckpt.get("policy_type", "obstacle"))
     model = build_policy(
         policy_type,
@@ -124,6 +125,7 @@ def load_checkpoint(
         chunk_size=chunk_size,
         d_model=d_model,
         depth=depth,
+        p=p
     )
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)

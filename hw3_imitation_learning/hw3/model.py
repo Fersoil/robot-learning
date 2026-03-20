@@ -42,43 +42,33 @@ class ObstaclePolicy(BasePolicy):
         state_dim: int,
         action_dim: int,
         chunk_size: int,
-        p = 0.1,
+        d_model: int,
+        depth: int,
+        p: float,
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
 
+        self.layers = nn.ModuleList()
         self.dropout = nn.Dropout(p=p)
 
-        self.net = nn.Sequential(
-            nn.Linear(self.state_dim, 512),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(128, self.chunk_size * self.action_dim),
-        )
+        for i in range(depth):
+            in_dim = state_dim if i == 0 else d_model
+            out_dim = chunk_size * action_dim if i == depth - 1 else d_model
+            self.layers.append(nn.Linear(in_dim, out_dim))
+            if i < depth - 1:
+                self.layers.append(nn.ReLU())
+                self.layers.append(self.dropout)
+        
 
     def forward(
         self, state: torch.Tensor
     ) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
 
-        return self.net(state).view(-1, self.chunk_size, self.action_dim)   
+        x = state
+        for layer in self.layers:
+            x = layer(x)
+        return x.view(-1, self.chunk_size, self.action_dim)
 
     def compute_loss(
         self,
@@ -102,19 +92,32 @@ class ObstaclePolicy(BasePolicy):
 class MultiTaskPolicy(BasePolicy):
     """Goal-conditioned policy for the multicube scene."""
 
-    def __init__(self, state_dim: int, action_dim: int, chunk_size: int) -> None:
+    def __init__(self, state_dim: int, action_dim: int, chunk_size: int, d_model: int, depth: int, p: float = 0.05):
         super().__init__(state_dim, action_dim, chunk_size)
+        self.rnn = nn.LSTM(
+            input_size=state_dim,
+            hidden_size=d_model,
+            num_layers=depth,
+            batch_first=True,
+            dropout=p if depth > 1 else 0.0
+        )
+        self.fc = nn.Linear(d_model, action_dim)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
+        # state: (B, chunk_size, state_dim)
+        rnn_out, _ = self.rnn(state)  # (B, chunk_size, d_model)
+        actions = self.fc(rnn_out)    # (B, chunk_size, action_dim)
+        return actions
 
     def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
-
-        raise NotImplementedError
+        pred = self.forward(state)
+        return nn.functional.mse_loss(pred, action_chunk)
 
     def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    def forward(self) -> torch.Tensor:
-        """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        raise NotImplementedError
+        self.eval()
+        with torch.no_grad():
+            return self.forward(state)
 
 
 PolicyType: TypeAlias = Literal["obstacle", "multitask"]
@@ -126,6 +129,9 @@ def build_policy(
     state_dim: int,
     action_dim: int,
     chunk_size: int,
+    d_model: int,
+    depth: int,
+    p: float = 0.05,
     **kwargs,
 ) -> BasePolicy:
     if policy_type == "obstacle":
@@ -133,11 +139,17 @@ def build_policy(
             state_dim=state_dim,
             action_dim=action_dim,
             chunk_size=chunk_size,
+            d_model=d_model,
+            depth=depth,
+            p=p
         )
     if policy_type == "multitask":
         return MultiTaskPolicy(
             state_dim=state_dim,
             action_dim=action_dim,
             chunk_size=chunk_size,
+            d_model=d_model,
+            depth=depth,
+            p=p
         )
     raise ValueError(f"Unknown policy type: {policy_type}")
