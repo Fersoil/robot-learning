@@ -94,28 +94,42 @@ class MultiTaskPolicy(BasePolicy):
 
     def __init__(self, state_dim: int, action_dim: int, chunk_size: int, d_model: int, depth: int, p: float = 0.05):
         super().__init__(state_dim, action_dim, chunk_size)
-        self.rnn = nn.LSTM(
-            input_size=state_dim,
-            hidden_size=d_model,
-            num_layers=depth,
-            batch_first=True,
-            dropout=p if depth > 1 else 0.0
-        )
-        self.fc = nn.Linear(d_model, action_dim)
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        self.layers = nn.ModuleList()
+        self.dropout = nn.Dropout(p=p)
+
+        for i in range(depth):
+            in_dim = state_dim if i == 0 else d_model
+            out_dim = chunk_size * action_dim if i == depth - 1 else d_model
+            self.layers.append(nn.Linear(in_dim, out_dim))
+            if i < depth - 1:
+                self.layers.append(nn.ReLU())
+                self.layers.append(self.dropout)
+        
+
+    def forward(
+        self, state: torch.Tensor
+    ) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        # state: (B, chunk_size, state_dim)
-        rnn_out, _ = self.rnn(state)  # (B, chunk_size, d_model)
-        actions = self.fc(rnn_out)    # (B, chunk_size, action_dim)
-        return actions
 
-    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
-        pred = self.forward(state)
-        return nn.functional.mse_loss(pred, action_chunk)
+        x = state
+        for layer in self.layers:
+            x = layer(x)
+        return x.view(-1, self.chunk_size, self.action_dim)
 
-    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
-        self.eval()
+    def compute_loss(
+        self,
+        state: torch.Tensor,
+        action_chunk: torch.Tensor,
+    ) -> torch.Tensor:
+        pred_chunk = self.forward(state)
+        loss = nn.functional.mse_loss(pred_chunk, action_chunk)
+        return loss
+
+    def sample_actions(
+        self,
+        state: torch.Tensor,
+    ) -> torch.Tensor:
         with torch.no_grad():
             return self.forward(state)
 
@@ -131,7 +145,7 @@ def build_policy(
     chunk_size: int,
     d_model: int,
     depth: int,
-    p: float = 0.05,
+    p: float = 0.1,
     **kwargs,
 ) -> BasePolicy:
     if policy_type == "obstacle":

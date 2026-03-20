@@ -41,24 +41,24 @@ hyperparameters["1"] = {
     "CYCLE_EPOCHS": 50,  
 }
 hyperparameters["2"] = {
-    "EPOCHS": 200,
+    "EPOCHS": 300,
     "BATCH_SIZE": 64,
     "LR": 1e-4,
     "VAL_SPLIT": 0.1,
     "D_MODEL": 512,
-    "DEPTH": 4,
-    "p": 0.05,
+    "DEPTH": 5,
+    "p": 0.1,
     "CYCLE_EPOCHS": 50,  
 }
 
 hyperparameters["3"] = {
-    "EPOCHS": 250,
-    "BATCH_SIZE": 64,
+    "EPOCHS": 400,
+    "BATCH_SIZE": 128,
     "LR": 1e-4,
     "VAL_SPLIT": 0.1,
     "D_MODEL": 512,
-    "DEPTH": 4,
-    "p": 0.05,
+    "DEPTH": 10,
+    "p": 0.1,
     "CYCLE_EPOCHS": 50,  
 }
 

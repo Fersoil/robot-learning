@@ -31,7 +31,7 @@ JOINT_NAMES: tuple[str, ...] = (
     "Wrist_Roll",
     "Jaw",
 )
-CAMERA_NAMES: tuple[str, ...] = ("left_wrist", "angle", "top")
+CAMERA_NAMES: tuple[str, ...] = ("left_wrist", "angle", "top", "right_pillar")
 
 DEFAULT_KEYMAP_PATH: Path = Path(__file__).resolve().parent / "keymap.json"
 
@@ -151,9 +151,9 @@ def compose_camera_views(
     images: dict[str, np.ndarray],
     camera_names: tuple[str, ...] = CAMERA_NAMES,
 ) -> np.ndarray:
-    """Arrange rendered camera images in a 2‑row layout.
+    """Arrange rendered camera images in a 2x2 grid layout (supports up to 4 views).
 
-    Top row = first two cameras side-by-side, bottom = third camera (padded).
+    Top row = first two cameras side-by-side, bottom row = next two (padded if needed).
     Each image is labelled with the camera name.
 
     Parameters
@@ -161,7 +161,7 @@ def compose_camera_views(
     images : dict[str, np.ndarray]
         Mapping from camera name → BGR uint8 image.
     camera_names : tuple[str, ...]
-        Order of cameras (first two go on top, rest on bottom row).
+        Order of cameras (first two go on top row, next two on bottom row).
     """
     views = []
     for cam in camera_names:
@@ -171,14 +171,13 @@ def compose_camera_views(
         )
         views.append(img)
 
+    # Ensure we have 4 images (pad with black if fewer)
+    h, w = views[0].shape[:2]
+    while len(views) < 4:
+        views.append(np.zeros((h, w, 3), dtype=views[0].dtype))
+
     top_row = np.concatenate(views[:2], axis=1)
-    bottom = views[2]
-    pad_w = top_row.shape[1] - bottom.shape[1]
-    if pad_w > 0:
-        padding = np.zeros((bottom.shape[0], pad_w, 3), dtype=bottom.dtype)
-        bottom_row = np.concatenate([bottom, padding], axis=1)
-    else:
-        bottom_row = bottom
+    bottom_row = np.concatenate(views[2:4], axis=1)
     return np.concatenate([top_row, bottom_row], axis=0)
 
 
