@@ -19,17 +19,14 @@ class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
         self.chunk_size = chunk_size
 
     @abc.abstractmethod
-    def compute_loss(
-        self, state: torch.Tensor, action_chunk: torch.Tensor
-    ) -> torch.Tensor:
+    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
         """Compute training loss for a batch."""
+        raise NotImplementedError
 
     @abc.abstractmethod
-    def sample_actions(
-        self,
-        state: torch.Tensor,
-    ) -> torch.Tensor:
+    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
         """Generate a chunk of actions with shape (batch, chunk_size, action_dim)."""
+        raise NotImplementedError
 
 
 # TODO: Students implement ObstaclePolicy here.
@@ -85,11 +82,11 @@ class ObstaclePolicy(BasePolicy):
 
     def compute_loss(
         self,
-        states: torch.Tensor,
-        action_chunks: torch.Tensor,
+        state: torch.Tensor,
+        action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        pred_chunks = self.forward(states)
-        loss = nn.functional.mse_loss(pred_chunks, action_chunks)
+        pred_chunk = self.forward(state)
+        loss = nn.functional.mse_loss(pred_chunk, action_chunk)
         return loss
 
     def sample_actions(
@@ -108,19 +105,14 @@ class MultiTaskPolicy(BasePolicy):
     def __init__(self, state_dim: int, action_dim: int, chunk_size: int) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
 
-    def compute_loss(
-        self,
-    ) -> torch.Tensor:
+    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
+
         raise NotImplementedError
 
-    def sample_actions(
-        self,
-    ) -> torch.Tensor:
+    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
-    def forward(
-        self,
-    ) -> torch.Tensor:
+    def forward(self) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
         raise NotImplementedError
 
