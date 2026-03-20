@@ -42,35 +42,71 @@ class ObstaclePolicy(BasePolicy):
 
     def __init__(
         self,
+        state_dim: int,
+        action_dim: int,
+        chunk_size: int,
+        p = 0.1,
     ) -> None:
-        super().__init__()
+        super().__init__(state_dim, action_dim, chunk_size)
+
+        self.dropout = nn.Dropout(p=p)
+
+        self.net = nn.Sequential(
+            nn.Linear(self.state_dim, 512),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(128, self.chunk_size * self.action_dim),
+        )
 
     def forward(
-        self,
+        self, state: torch.Tensor
     ) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        raise NotImplementedError
+
+        return self.net(state).view(-1, self.chunk_size, self.action_dim)   
 
     def compute_loss(
         self,
+        states: torch.Tensor,
+        action_chunks: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        pred_chunks = self.forward(states)
+        loss = nn.functional.mse_loss(pred_chunks, action_chunks)
+        return loss
 
     def sample_actions(
         self,
         state: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        with torch.no_grad():
+            return self.forward(state)
+        
 
 
 # TODO: Students implement MultiTaskPolicy here.
 class MultiTaskPolicy(BasePolicy):
     """Goal-conditioned policy for the multicube scene."""
 
-    def __init__(
-        self,
-    ) -> None:
-        super().__init__()
+    def __init__(self, state_dim: int, action_dim: int, chunk_size: int) -> None:
+        super().__init__(state_dim, action_dim, chunk_size)
 
     def compute_loss(
         self,
@@ -97,17 +133,19 @@ def build_policy(
     *,
     state_dim: int,
     action_dim: int,
+    chunk_size: int,
+    **kwargs,
 ) -> BasePolicy:
     if policy_type == "obstacle":
         return ObstaclePolicy(
-            action_dim=action_dim,
             state_dim=state_dim,
-            # TODO: Build with your chosen specifications
+            action_dim=action_dim,
+            chunk_size=chunk_size,
         )
     if policy_type == "multitask":
         return MultiTaskPolicy(
-            action_dim=action_dim,
             state_dim=state_dim,
-            # TODO: Build with your chosen specifications
+            action_dim=action_dim,
+            chunk_size=chunk_size,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")

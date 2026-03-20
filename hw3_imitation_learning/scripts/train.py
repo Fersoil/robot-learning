@@ -28,9 +28,9 @@ from hw3.model import BasePolicy, build_policy
 from torch.utils.data import DataLoader, random_split
 
 # TODO: Choose your own hyperparameters!
-EPOCHS = ... 
-BATCH_SIZE = ...
-LR = ...
+EPOCHS = 400
+BATCH_SIZE = 128
+LR = 1e-2
 VAL_SPLIT = 0.1
 
 
@@ -45,9 +45,21 @@ def train_one_epoch(
     n_batches = 0
 
     for batch in loader:
-        states, action_chunks = batch
-        # TODO: Implement the training step for one batch here.
-        # This mostly: Get states and action_chunks onto the correct device, compute the loss, and step the optimizer.
+            states, action_chunks = batch
+
+            states = states.to(device)
+            action_chunks = action_chunks.to(device)
+
+            loss = model.compute_loss(states, action_chunks)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+            # TODO: Implement the training step for one batch here.
+            # This mostly: Get states and action_chunks onto the correct device, compute the loss, and step the optimizer.
 
     return total_loss / max(n_batches, 1)
 
@@ -64,6 +76,14 @@ def evaluate(
 
     for batch in loader:
         states, action_chunks = batch
+
+        states = states.to(device)
+        action_chunks = action_chunks.to(device)
+
+        loss = model.compute_loss(states, action_chunks)
+        total_loss += loss.item()
+        n_batches += 1 
+
         # TODO: Implement the evaluation step for one batch here.
 
     return total_loss / max(n_batches, 1)
@@ -74,6 +94,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train action-chunking policy.")
     parser.add_argument(
         "--zarr", type=Path, required=True, help="Path to processed .zarr store."
+    )
+    parser.add_argument(
+        "--extra-zarr",
+        type=Path,
+        nargs="*",
+        default=None,
+        help="Optional additional processed .zarr stores to merge with --zarr.",
     )
     parser.add_argument(
         "--policy",
@@ -159,7 +186,7 @@ def main() -> None:
         args.policy,
         state_dim=states.shape[1],
         action_dim=actions.shape[1],
-        # TODO: build with your desired specifications
+        chunk_size=args.chunk_size,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -168,6 +195,10 @@ def main() -> None:
     # TODO: implement an optimizer and scheduler
     # optimizer =
     # scheduler =
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    # Use CosineAnnealingLR for smooth LR decay
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-5)
 
     # ── training loop ─────────────────────────────────────────────────
     best_val = float("inf")
@@ -197,11 +228,13 @@ def main() -> None:
     save_path = ckpt_dir / save_name
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
+
     for epoch in range(1, EPOCHS + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
         val_loss = evaluate(model, val_loader, device)
         scheduler.step()
 
+        current_lr = scheduler.get_last_lr()[0]
         tag = ""
         if val_loss < best_val:
             best_val = val_loss
@@ -230,7 +263,7 @@ def main() -> None:
 
         print(
             f"Epoch {epoch:3d}/{EPOCHS} | "
-            f"train {train_loss:.6f} | val {val_loss:.6f}{tag}"
+            f"train {train_loss:.6f} | val {val_loss:.6f}{tag} | lr {current_lr:.6e}"
         )
 
     print(f"\nBest val loss: {best_val:.6f}")
