@@ -28,14 +28,59 @@ class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
         """Generate a chunk of actions with shape (batch, chunk_size, action_dim)."""
         raise NotImplementedError
 
+class ResidualBlock(nn.Module):
+    """Single residual block: Linear -> LayerNorm -> ReLU -> Dropout, with skip."""
 
-# TODO: Students implement ObstaclePolicy here.
+    def __init__(self, d_model: int, p: float) -> None:
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.LayerNorm(d_model),
+            nn.ReLU(),
+            nn.Dropout(p=p),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.block(x)
+
+
+class ResidualMLP(nn.Module):
+    """Input projection -> N residual blocks -> output head."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        d_model: int,
+        depth: int,
+        p: float,
+    ) -> None:
+        super().__init__()
+        self.input_proj = nn.Linear(input_dim, d_model)
+        self.blocks = nn.ModuleList([ResidualBlock(d_model, p) for _ in range(depth)])
+        self.head = nn.Linear(d_model, output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = nn.functional.relu(self.input_proj(x))
+        for block in self.blocks:
+            x = block(x)
+        return self.head(x)
+
+
 class ObstaclePolicy(BasePolicy):
-    """Predicts action chunks with an MSE loss.
+    """MLP with obstacle-aware feature injection, residual blocks, and LayerNorm.
 
-    A simple MLP that maps a state vector to a flat action chunk
-    (chunk_size * action_dim) and reshapes to (B, chunk_size, action_dim).
+    Architecture:
+      1. input_proj   : full state  -> d_model
+      2. obstacle_proj: last 3 dims -> d_model, added to input_proj output
+         This gives the obstacle signal a direct gradient path.
+      3. N residual blocks (Linear -> LayerNorm -> ReLU -> Dropout + skip)
+      4. Linear head  -> (B, chunk_size, action_dim)
+
+    state_ee_xyz state_gripper "state_cube[:3]" state_obstacle (state_obstacle must be the LAST 3 dims)
     """
+
+    OBSTACLE_DIM = 3
 
     def __init__(
         self,
@@ -48,88 +93,101 @@ class ObstaclePolicy(BasePolicy):
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
 
-        self.layers = nn.ModuleList()
-        self.dropout = nn.Dropout(p=p)
+        self.input_proj    = nn.Linear(state_dim, d_model)
+        self.obstacle_proj = nn.Linear(self.OBSTACLE_DIM, d_model)
+        self.blocks        = nn.ModuleList([ResidualBlock(d_model, p) for _ in range(depth - 1)])
+        self.head          = nn.Linear(d_model, chunk_size * action_dim)
 
-        for i in range(depth):
-            in_dim = state_dim if i == 0 else d_model
-            out_dim = chunk_size * action_dim if i == depth - 1 else d_model
-            self.layers.append(nn.Linear(in_dim, out_dim))
-            if i < depth - 1:
-                self.layers.append(nn.ReLU())
-                self.layers.append(self.dropout)
-        
-
-    def forward(
-        self, state: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
+        obstacle = state[..., -self.OBSTACLE_DIM:]       # (B, 3)
+        x = self.input_proj(state) + self.obstacle_proj(obstacle)
+        x = nn.functional.relu(x)
+        for block in self.blocks:
+            x = block(x)
+        return self.head(x).view(-1, self.chunk_size, self.action_dim)
 
-        x = state
-        for layer in self.layers:
-            x = layer(x)
-        return x.view(-1, self.chunk_size, self.action_dim)
+    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
+        return nn.functional.mse_loss(self.forward(state), action_chunk)
 
-    def compute_loss(
-        self,
-        state: torch.Tensor,
-        action_chunk: torch.Tensor,
-    ) -> torch.Tensor:
-        pred_chunk = self.forward(state)
-        loss = nn.functional.mse_loss(pred_chunk, action_chunk)
-        return loss
-
-    def sample_actions(
-        self,
-        state: torch.Tensor,
-    ) -> torch.Tensor:
+    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             return self.forward(state)
-        
 
 
-# TODO: Students implement MultiTaskPolicy here.
 class MultiTaskPolicy(BasePolicy):
-    """Goal-conditioned policy for the multicube scene."""
+    """
+    MLP with one-hot attention to target cube, relative position features, residual blocks, and LayerNorm.
+    """
 
-    def __init__(self, state_dim: int, action_dim: int, chunk_size: int, d_model: int, depth: int, p: float = 0.05):
+    MLP_INPUT_DIM = 7  # gripper(1) + ee_to_cube(3) + ee_to_goal(3)
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        chunk_size: int,
+        d_model: int,
+        depth: int,
+        p: float = 0.05,
+        state_mean: torch.Tensor | None = None,
+        state_std:  torch.Tensor | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
 
-        self.layers = nn.ModuleList()
-        self.dropout = nn.Dropout(p=p)
+        # Stored as buffers: saved in checkpoint, moved to device automatically
+        self.register_buffer("state_mean", state_mean)
+        self.register_buffer("state_std",  state_std)
 
-        for i in range(depth):
-            in_dim = state_dim if i == 0 else d_model
-            out_dim = chunk_size * action_dim if i == depth - 1 else d_model
-            self.layers.append(nn.Linear(in_dim, out_dim))
-            if i < depth - 1:
-                self.layers.append(nn.ReLU())
-                self.layers.append(self.dropout)
-        
+        self.mlp = ResidualMLP(
+            input_dim=self.MLP_INPUT_DIM,
+            output_dim=chunk_size * action_dim,
+            d_model=d_model,
+            depth=depth,
+            p=p,
+        )
 
-    def forward(
-        self, state: torch.Tensor
-    ) -> torch.Tensor:
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        """Dynamically register buffers if they are missing (e.g. older checkpoints)."""
+        for key in ("state_mean", "state_std"):
+            if key in state_dict and getattr(self, key, None) is None:
+                self.register_buffer(key, state_dict[key])
+        return super().load_state_dict(state_dict, *args, **kwargs)
+
+    def _build_input(self, state: torch.Tensor) -> torch.Tensor:
+        """Undo normalisation, apply one-hot attention, compute relative vectors."""
+        B = state.shape[0]
+
+        # Undo z-score so that one-hot values are crisp 0/1 and xyz in metres
+        s = state * self.state_std + self.state_mean
+
+        robot_xyz = s[:, :3]                                    # (B, 3)
+        gripper   = s[:, 3:4]                                   # (B, 1)
+        cubes     = s[:, 4:13].view(B, 3, 3)                   # (B, 3, 3)
+        goal_one_hot = nn.functional.one_hot(
+            s[:, 13:16].argmax(dim=1), num_classes=3
+        ).float()                                               # (B, 3)
+        goal_pos  = s[:, 16:19]                                 # (B, 3)
+
+        # Hard attention: select only the target cube
+        attended_cube = (cubes * goal_one_hot.unsqueeze(-1)).sum(dim=1)  # (B, 3)
+
+        ee_to_cube = attended_cube - robot_xyz                  # (B, 3)
+        ee_to_goal = goal_pos      - robot_xyz                  # (B, 3)
+
+        return torch.cat([gripper, ee_to_cube, ee_to_goal], dim=1)  # (B, 7)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
+        x = self._build_input(state)                            # (B, 7)
+        flat = self.mlp(x)                                      # (B, chunk_size * action_dim)
+        return flat.view(-1, self.chunk_size, self.action_dim)
 
-        x = state
-        for layer in self.layers:
-            x = layer(x)
-        return x.view(-1, self.chunk_size, self.action_dim)
+    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
+        return nn.functional.mse_loss(self.forward(state), action_chunk)
 
-    def compute_loss(
-        self,
-        state: torch.Tensor,
-        action_chunk: torch.Tensor,
-    ) -> torch.Tensor:
-        pred_chunk = self.forward(state)
-        loss = nn.functional.mse_loss(pred_chunk, action_chunk)
-        return loss
-
-    def sample_actions(
-        self,
-        state: torch.Tensor,
-    ) -> torch.Tensor:
+    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             return self.forward(state)
 
@@ -146,6 +204,8 @@ def build_policy(
     d_model: int,
     depth: int,
     p: float = 0.1,
+    state_mean: torch.Tensor | None = None,
+    state_std:  torch.Tensor | None = None,
     **kwargs,
 ) -> BasePolicy:
     if policy_type == "obstacle":
@@ -164,6 +224,8 @@ def build_policy(
             chunk_size=chunk_size,
             d_model=d_model,
             depth=depth,
-            p=p
+            p=p,
+            state_mean=state_mean,
+            state_std=state_std,
         )
     raise ValueError(f"Unknown policy type: {policy_type}")

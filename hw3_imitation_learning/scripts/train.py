@@ -48,18 +48,18 @@ hyperparameters["2"] = {
     "D_MODEL": 512,
     "DEPTH": 5,
     "p": 0.1,
-    "CYCLE_EPOCHS": 50,  
+    "CYCLE_EPOCHS": 300,  
 }
 
 hyperparameters["3"] = {
-    "EPOCHS": 400,
-    "BATCH_SIZE": 128,
+    "EPOCHS": 300,
+    "BATCH_SIZE": 256,
     "LR": 1e-4,
     "VAL_SPLIT": 0.1,
     "D_MODEL": 512,
-    "DEPTH": 10,
+    "DEPTH": 6,
     "p": 0.1,
-    "CYCLE_EPOCHS": 50,  
+    "CYCLE_EPOCHS": 300,  
 }
 
 def train_one_epoch(
@@ -234,13 +234,15 @@ def main() -> None:
         d_model=D_MODEL,
         depth=DEPTH,
         p=DROPOUT_P,
+        state_mean=torch.as_tensor(normalizer.state_mean, dtype=torch.float32),  
+        state_std=torch.as_tensor(normalizer.state_std,  dtype=torch.float32),   
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
 
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     # Use CosineAnnealingLR for smooth LR decay
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CYCLE_EPOCHS, eta_min=1e-7, last_epoch=-1)
 
