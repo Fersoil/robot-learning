@@ -67,20 +67,13 @@ class ResidualMLP(nn.Module):
         return self.head(x)
 
 
+
 class ObstaclePolicy(BasePolicy):
-    """MLP with obstacle-aware feature injection, residual blocks, and LayerNorm.
+    """Predicts action chunks with an MSE loss.
 
-    Architecture:
-      1. input_proj   : full state  -> d_model
-      2. obstacle_proj: last 3 dims -> d_model, added to input_proj output
-         This gives the obstacle signal a direct gradient path.
-      3. N residual blocks (Linear -> LayerNorm -> ReLU -> Dropout + skip)
-      4. Linear head  -> (B, chunk_size, action_dim)
-
-    state_ee_xyz state_gripper "state_cube[:3]" state_obstacle (state_obstacle must be the LAST 3 dims)
+    A simple MLP that maps a state vector to a flat action chunk
+    (chunk_size * action_dim) and reshapes to (B, chunk_size, action_dim).
     """
-
-    OBSTACLE_DIM = 3
 
     def __init__(
         self,
@@ -93,24 +86,41 @@ class ObstaclePolicy(BasePolicy):
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
 
-        self.input_proj    = nn.Linear(state_dim, d_model)
-        self.obstacle_proj = nn.Linear(self.OBSTACLE_DIM, d_model)
-        self.blocks        = nn.ModuleList([ResidualBlock(d_model, p) for _ in range(depth - 1)])
-        self.head          = nn.Linear(d_model, chunk_size * action_dim)
+        self.layers = nn.ModuleList()
+        self.dropout = nn.Dropout(p=p)
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        for i in range(depth):
+            in_dim = state_dim if i == 0 else d_model
+            out_dim = chunk_size * action_dim if i == depth - 1 else d_model
+            self.layers.append(nn.Linear(in_dim, out_dim))
+            if i < depth - 1:
+                self.layers.append(nn.ReLU())
+                self.layers.append(self.dropout)
+        
+
+    def forward(
+        self, state: torch.Tensor
+    ) -> torch.Tensor:
         """Return predicted action chunk of shape (B, chunk_size, action_dim)."""
-        obstacle = state[..., -self.OBSTACLE_DIM:]       # (B, 3)
-        x = self.input_proj(state) + self.obstacle_proj(obstacle)
-        x = nn.functional.relu(x)
-        for block in self.blocks:
-            x = block(x)
-        return self.head(x).view(-1, self.chunk_size, self.action_dim)
 
-    def compute_loss(self, state: torch.Tensor, action_chunk: torch.Tensor) -> torch.Tensor:
-        return nn.functional.mse_loss(self.forward(state), action_chunk)
+        x = state
+        for layer in self.layers:
+            x = layer(x)
+        return x.view(-1, self.chunk_size, self.action_dim)
 
-    def sample_actions(self, state: torch.Tensor) -> torch.Tensor:
+    def compute_loss(
+        self,
+        state: torch.Tensor,
+        action_chunk: torch.Tensor,
+    ) -> torch.Tensor:
+        pred_chunk = self.forward(state)
+        loss = nn.functional.mse_loss(pred_chunk, action_chunk)
+        return loss
+
+    def sample_actions(
+        self,
+        state: torch.Tensor,
+    ) -> torch.Tensor:
         with torch.no_grad():
             return self.forward(state)
 
@@ -215,7 +225,7 @@ def build_policy(
             chunk_size=chunk_size,
             d_model=d_model,
             depth=depth,
-            p=p
+            p=p,
         )
     if policy_type == "multitask":
         return MultiTaskPolicy(
