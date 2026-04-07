@@ -36,6 +36,14 @@ class PolicyIteration:
         self.pi = np.ones((self.env.n_states, self.env.n_actions), dtype=float)
         self.pi /= self.env.n_actions
 
+    def _expected_action_value(self, s, a, v):
+        """Compute expected Q(s, a) under value function v."""
+        qsa = 0.0
+        for prob, next_state, reward, done in self.env.P[s][a]:
+            bootstrap = 0.0 if done else self.gamma * v[next_state]
+            qsa += prob * (reward + bootstrap)
+        return qsa
+
     def policy_evaluation(self):
         """
         Evaluate the current policy until convergence.
@@ -57,23 +65,16 @@ class PolicyIteration:
             for s in range(self.env.n_states):
                 qsa_list = []
                 for a in range(self.env.n_actions):
-                    qsa = 0.0
-                    
-                    # TODO: compute the updated value of state s under the current policy.
-                    #
-                    # Suggested steps:
-                    # 1. For each action a, compute the action-value under self.v
-                    # 2. Weight q_pi(s, a) by pi[s][a]
-                    # 3. Sum over all actions to obtain new_v[s]
-                    raise NotImplementedError("TODO: implement policy evaluation update")
+                    qsa = self._expected_action_value(s, a, self.v)
+                    qsa_list.append(self.pi[s][a] * qsa)
                 
                 new_v[s] = sum(qsa_list)
                 max_diff = max(max_diff, abs(new_v[s] - self.v[s]))
 
             self.v = new_v
 
-            # TODO: stop when the value function has converged
-            raise NotImplementedError("TODO: add convergence check")
+            if max_diff < self.theta:
+                break
 
     def policy_improvement(self):
         """
@@ -93,10 +94,8 @@ class PolicyIteration:
         for s in range(self.env.n_states):
             qsa_list = []
             for a in range(self.env.n_actions):
-                qsa = 0.0
-                
-                # TODO: compute qsa_list for all actions at state s
-                raise NotImplementedError("TODO: compute q-values for policy improvement")
+                qsa = self._expected_action_value(s, a, self.v)
+                qsa_list.append(qsa)
 
             max_q = max(qsa_list)
             num_best_actions = sum(np.isclose(qsa_list, max_q))
@@ -131,8 +130,8 @@ class PolicyIteration:
         while True:
             old_pi = copy.deepcopy(self.pi)
 
-            # TODO: implement the main loop of policy iteration
-            raise NotImplementedError("TODO: implement policy iteration main loop")
+            self.policy_evaluation()
+            new_pi = self.policy_improvement()
 
             if np.allclose(old_pi, new_pi):
                 break
@@ -166,6 +165,14 @@ class ValueIteration:
         self.v = np.zeros(self.env.n_states, dtype=float)
         self.pi = np.zeros((self.env.n_states, self.env.n_actions), dtype=float)
 
+    def _expected_action_value(self, s, a, v):
+        """Compute expected Q(s, a) under value function v."""
+        qsa = 0.0
+        for prob, next_state, reward, done in self.env.P[s][a]:
+            bootstrap = 0.0 if done else self.gamma * v[next_state]
+            qsa += prob * (reward + bootstrap)
+        return qsa
+
     def value_iteration(self):
         """
         Run value iteration until convergence.
@@ -187,18 +194,16 @@ class ValueIteration:
             for s in range(self.env.n_states):
                 qsa_list = []
                 for a in range(self.env.n_actions):
-                    qsa = 0.0
-                    
-                    # TODO: compute all action-values Q(s, a)
-                    raise NotImplementedError("TODO: implement value iteration update")
+                    qsa = self._expected_action_value(s, a, self.v)
+                    qsa_list.append(qsa)
 
                 new_v[s] = max(qsa_list)
                 max_diff = max(max_diff, abs(new_v[s] - self.v[s]))
 
             self.v = new_v
-            
-            # TODO: stop when the value function has converged
-            raise NotImplementedError("TODO: add convergence check")
+
+            if max_diff < self.theta:
+                break
 
         self.get_policy()
         return self.v, self.pi
@@ -218,9 +223,8 @@ class ValueIteration:
         for s in range(self.env.n_states):
             qsa_list = []
             for a in range(self.env.n_actions):
-                qsa = 0.0
-                # TODO: compute qsa_list for all actions
-                raise NotImplementedError("TODO: compute q-values for greedy policy extraction")
+                qsa = self._expected_action_value(s, a, self.v)
+                qsa_list.append(qsa)
 
             max_q = max(qsa_list)
             num_best_actions = sum(np.isclose(qsa_list, max_q))
